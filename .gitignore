@@ -22,3 +22,5 @@ npm-debug.log_
 # OS files
 
 .DS_Store
+docker-volumes/
+mongodb_data/
