@@ -23,7 +23,7 @@ export class UserController {
       }
     }
 
-  async getAllUsers(req: Request, res: Response): Promise<void> {
+  async getAllUsers(_req: Request, res: Response): Promise<void> {
     try {
       const users = await userService.getAllUsers();
       res.status(200).json(users);
