@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "jest",
     "start": "node dist/app.js",
+    "build": "tsc",
     "dev": "nodemon src/app.ts",
-    "build": "tsc"
+    "docker:dev": "docker-compose up"
   },
   "keywords": [],
   "author": "",
