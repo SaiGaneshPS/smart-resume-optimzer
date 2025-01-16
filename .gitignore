@@ -3,6 +3,7 @@
 node_modules/
 .env
 .env.local
+.env.*.local
 
 # Build outputs
 
@@ -13,9 +14,13 @@ build/
 
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Logs
 
+logs
+*.log
 _.log
 npm-debug.log_
 
