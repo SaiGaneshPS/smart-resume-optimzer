@@ -1,12 +1,9 @@
 import { Request, Response } from 'express';
-import { User, IUserDocument } from '../models/User';
+import { User } from '../models/User';
 import { generateToken } from '../utils/jwt.utils';
 import { EmailService } from '../services/emailService';
+import { AuthenticatedRequest } from '../types/custom.types';
 import crypto from 'crypto';
-
-interface AuthenticatedRequest extends Request {
-    user?: IUserDocument;
-  }
 
 const emailService = new EmailService();
 
@@ -47,11 +44,29 @@ export class AuthController {
 
   async login(req: Request, res: Response): Promise<void> {
     try {
+
+      console.log('🔄 Login attempt received:', {
+        email: req.body.email,
+        ip: req.ip,
+        timestamp: new Date().toISOString()
+    });
+
       const { email, password } = req.body;
+      
+      const rateLimitReq = req as AuthenticatedRequest;
+
+      if (rateLimitReq.rateLimit?.remaining === 0) {
+      res.status(429).json({ 
+        error: 'Too many login attempts, please try again later'
+      });
+      return;
+     }
 
       // Check if user exists
       const user = await User.findOne({ email }).select('+password');
       if (!user) {
+        // Increment rate limit counter for failed attempt
+        rateLimitReq.rateLimit?.increment?.();
         res.status(401).json({ error: 'Invalid credentials' });
         return;
       }
@@ -59,6 +74,8 @@ export class AuthController {
       // Check password
       const isMatch = await user.comparePassword(password);
       if (!isMatch) {
+        // Increment rate limit counter for failed attempt
+        rateLimitReq.rateLimit?.increment?.();
         res.status(401).json({ error: 'Invalid credentials' });
         return;
       }
@@ -70,9 +87,18 @@ export class AuthController {
       }
 
       const token = generateToken(user);
+      
+      // Set rate limit headers
+      if (rateLimitReq.rateLimit) {
+        res.set('X-RateLimit-Remaining', String(rateLimitReq.rateLimit.remaining));
+      }
+      
       res.json({ token });
     } catch (error) {
-      res.status(500).json({ error: 'Error logging in' });
+      console.error('🔴 Login error:', error);
+        res.status(500).json({ error: 'Error logging in' });
+      // console.error('Login error:', error);
+      // res.status(500).json({ error: 'Error logging in' });
     }
   }
 
