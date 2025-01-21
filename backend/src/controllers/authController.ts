@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { User } from '../models/User';
+import { User, IUserDocument } from '../models/User';
 import { generateToken } from '../utils/jwt.utils';
 import { EmailService } from '../services/emailService';
 import { AuthenticatedRequest } from '../types/custom.types';
@@ -10,97 +10,119 @@ const emailService = new EmailService();
 export class AuthController {
   async register(req: Request, res: Response): Promise<void> {
     try {
-      const { email, password, firstName, lastName } = req.body;
+        console.log('Registration attempt with data:', {
+            email: req.body.email,
+            firstName: req.body.firstName,
+            lastName: req.body.lastName
+        });
 
-      // Check if user exists
-      let user = await User.findOne({ email });
-      if (user) {
-        res.status(400).json({ error: 'Email already registered' });
-        return;
-      }
+        const { email, password, firstName, lastName } = req.body;
 
-      // Create verification token
-      const verificationToken = crypto.randomBytes(20).toString('hex');
+        // Check if user exists
+        let user = await User.findOne({ email });
+        if (user) {
+            console.log('Registration failed: Email already exists:', email);
+            res.status(400).json({ error: 'Email already registered' });
+            return;
+        }
 
-      // Create user
-      user = await User.create({
-        email,
-        password,
-        firstName,
-        lastName,
-        verificationToken,
-        isEmailVerified:false
-      });
+        try {
+            // Create user
+            user = await User.create({
+                email,
+                password,
+                firstName,
+                lastName,
+                verificationToken: crypto.randomBytes(20).toString('hex'),
+                isEmailVerified: true
+            });
 
-      // Send verification email
-      await emailService.sendVerificationEmail(email, verificationToken);
+            console.log('User created:', {
+                id: user._id,
+                email: user.email,
+                hasPassword: !!user.password // Check if password was saved
+            });
 
-      const token = generateToken(user);
-      res.status(201).json({ token });
+            const token = generateToken(user);
+            console.log('Token generated successfully');
+
+            try {
+                await emailService.sendVerificationEmail(email, user.verificationToken!);
+                console.log('Verification email sent');
+            } catch (emailError) {
+                console.error('Email sending failed:', emailError);
+                // Continue since user is created
+            }
+
+            res.status(201).json({ 
+                message: 'Registration successful',
+                token 
+            });
+
+        } catch (createError) {
+            console.error('Error creating user:', createError);
+            throw createError; // Let outer catch handle it
+        }
+
     } catch (error) {
-      res.status(500).json({ error: 'Error registering user' });
+        console.error('Full registration error:', error);
+        res.status(500).json({ error: 'Error registering user' });
     }
-  }
+}
 
-  async login(req: Request, res: Response): Promise<void> {
+async login(req: Request, res: Response): Promise<void> {
     try {
+        console.log('Login attempt:', {
+            email: req.body.email,
+            hasPassword: !!req.body.password
+        });
 
-      console.log('🔄 Login attempt received:', {
-        email: req.body.email,
-        ip: req.ip,
-        timestamp: new Date().toISOString()
-    });
+        const { email, password } = req.body;
 
-      const { email, password } = req.body;
-      
-      const rateLimitReq = req as AuthenticatedRequest;
+        // Check if user exists
+        const user = await User.findOne({ email }).select('+password');
+        console.log('User found:', {
+            exists: !!user,
+            hasPassword: user ? !!user.password : false,
+            isEmailVerified: user ? user.isEmailVerified : false
+        });
 
-      if (rateLimitReq.rateLimit?.remaining === 0) {
-      res.status(429).json({ 
-        error: 'Too many login attempts, please try again later'
-      });
-      return;
-     }
+        if (!user) {
+            console.log('Login failed: User not found');
+            res.status(401).json({ error: 'Invalid credentials' });
+            return;
+        }
 
-      // Check if user exists
-      const user = await User.findOne({ email }).select('+password');
-      if (!user) {
-        // Increment rate limit counter for failed attempt
-        rateLimitReq.rateLimit?.increment?.();
-        res.status(401).json({ error: 'Invalid credentials' });
-        return;
-      }
+        // Check password
+        const isMatch = await user.comparePassword(password);
+        console.log('Password check:', {
+            isMatch,
+            providedPassword: !!password
+        });
 
-      // Check password
-      const isMatch = await user.comparePassword(password);
-      if (!isMatch) {
-        // Increment rate limit counter for failed attempt
-        rateLimitReq.rateLimit?.increment?.();
-        res.status(401).json({ error: 'Invalid credentials' });
-        return;
-      }
+        if (!isMatch) {
+            console.log('Login failed: Password mismatch');
+            res.status(401).json({ error: 'Invalid credentials' });
+            return;
+        }
 
-      // Check if email is verified
-      if (!user.isEmailVerified) {
-        res.status(401).json({ error: 'Please verify your email' });
-        return;
-      }
+        // Check if email is verified
+        if (!user.isEmailVerified) {
+            console.log('Login failed: Email not verified');
+            res.status(401).json({ error: 'Please verify your email' });
+            return;
+        }
 
-      const token = generateToken(user);
-      
-      // Set rate limit headers
-      if (rateLimitReq.rateLimit) {
-        res.set('X-RateLimit-Remaining', String(rateLimitReq.rateLimit.remaining));
-      }
-      
-      res.json({ token });
+        const token = generateToken(user);
+        console.log('Login successful, token generated');
+
+        res.json({ token });
+
     } catch (error) {
-      console.error('🔴 Login error:', error);
+        console.error('Full login error:', error);
         res.status(500).json({ error: 'Error logging in' });
-      // console.error('Login error:', error);
-      // res.status(500).json({ error: 'Error logging in' });
     }
-  }
+}
 
   async verifyEmail(req: Request, res: Response): Promise<void> {
     try {
@@ -231,4 +253,44 @@ export class AuthController {
       res.redirect(`${process.env.FRONTEND_URL}/login?error=true`);
     }
   }
+  async updateProfile(req: Request, res: Response): Promise<void> {
+    try {
+        const userId = (req.user as IUserDocument)?._id;
+        const { firstName, lastName, currentPassword, newPassword } = req.body;
+
+        const user = await User.findById(userId).select('+password');
+        if (!user) {
+            res.status(404).json({ error: 'User not found' });
+            return;
+        }
+
+        // Update name fields
+        user.firstName = firstName;
+        user.lastName = lastName;
+
+        // Handle password update if provided
+        if (currentPassword && newPassword) {
+            const isPasswordValid = await user.comparePassword(currentPassword);
+            if (!isPasswordValid) {
+                res.status(401).json({ error: 'Current password is incorrect' });
+                return;
+            }
+            user.password = newPassword; // The pre-save hook will hash it
+        }
+
+        await user.save();
+
+        res.json({
+            message: 'Profile updated successfully',
+            user: {
+                firstName: user.firstName,
+                lastName: user.lastName,
+                email: user.email
+            }
+        });
+    } catch (error) {
+        console.error('Profile update error:', error);
+        res.status(500).json({ error: 'Error updating profile' });
+    }
+}
 }
